@@ -1,0 +1,84 @@
+contract Abend =
+  record state = {
+    _owner    : address,
+    _balances : map(address, int)}
+
+  public stateful entrypoint init() : state =
+    { _owner    = Call.caller,
+      _balances = {}}
+
+  private function lookupByAddress(k : address, m, v) =
+    switch(Map.lookup(k, m))
+      None    => v
+      Some(x) => x
+
+  public stateful entrypoint transferOwnership(newOwner: address) =
+    onlyOwner()
+    put(state{_owner = newOwner})
+
+  public entrypoint balanceOf(account: address) : int =
+    lookupByAddress(account, state._balances, 0)
+
+  public stateful entrypoint transfer(to: address, amount: int) : bool =
+    require(amount > 0, "Amount must be > 0")
+    require(amount =< balanceOf(Call.caller), "Insufficient balance")
+
+    put(state{
+      _balances[Call.caller] = sub(balanceOf(Call.caller), amount),
+      _balances[to] = add(balanceOf(to), amount)})
+
+    true
+
+  private function _validate_and_sum(accu: int, x: (address, int)) : int =
+    switch(x)
+      (_, amount) =>
+        require(amount > 0, "Amount must be > 0")
+        add(accu, amount)
+
+  private function _update_balance_state(state: state, x: (address, int)) : state =
+    switch(x)
+      // this is fine, becaue each address can only occur once in the original map
+      (address, amount) => state{_balances[address] = add(balanceOf(address), amount)}
+
+  public stateful entrypoint transfer_many(txs: map(address, int)) : bool =
+    let txs_list = Map.to_list(txs)
+
+    let total_amount = foldl(_validate_and_sum, 0, txs_list)
+    require(total_amount > 0, "Total amount must be > 0")
+    require(total_amount =< balanceOf(Call.caller), "Insufficient balance")
+
+    let new_state = foldl(_update_balance_state, state, txs_list)
+    put(new_state{_balances[Call.caller] = sub(balanceOf(Call.caller), total_amount)})
+
+    true
+
+  public stateful entrypoint mint(account: address, amount: int) : () =
+    onlyOwner()
+    put(state{_balances[account] = add(balanceOf(account), amount)})
+
+  public stateful entrypoint get_balance(account: address) : int =
+    balanceOf(account)
+
+  public stateful entrypoint burn(account: address, amount: int) : int =
+    onlyOwner()
+    require(state._balances[account] >= amount, "Insufficient balance")
+    put(state{_balances[account] = sub(balanceOf(account), amount)})
+
+    balanceOf(Call.caller)
+
+  private function add(a: int, b: int) : int =
+    let c = a + b
+    require(c >= a, "Overflow")
+    c
+
+  private function sub(a: int, b: int) : int =
+    require(b =< a, "Overflow")
+    a - b
+
+  private function onlyOwner() =
+    require(Call.caller == state._owner, "onlyOwner")
+
+  private function foldl(f : (('b, 'a) => 'b), accu: 'b, xs : list('a)) : 'b =
+    switch(xs)
+      [] => accu
+      x :: xs' => foldl(f, f(accu, x), xs')
